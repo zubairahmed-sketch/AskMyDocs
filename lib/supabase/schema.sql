@@ -74,7 +74,8 @@ create table if not exists conversations (
   user_id uuid references auth.users not null,
   title text,                        -- derived from the first question asked
   scope_document_ids uuid[],         -- null/empty = search across all documents
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
 );
 
 alter table conversations enable row level security;

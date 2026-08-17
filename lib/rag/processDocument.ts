@@ -1,43 +1,39 @@
 /**
  * processDocument.ts — Document processing orchestrator
  *
- * Runs after the upload response has been sent to the client (via Next.js `after()`).
- * Phase 1: extract text and update status.
- * Phase 2-3 will add chunking and embedding here.
+ * Runs after upload response is sent (via Next.js after()).
+ * Pipeline: extract text → chunk → embed → update status.
  *
- * Per SPEC Rule 10: processing must not block the upload request.
+ * Rule 10: processing must not block the upload request.
  */
 
 import { createClient } from '@supabase/supabase-js';
 import { downloadFile } from '@/lib/supabase/storage';
 import { extractText } from '@/lib/rag/extractText';
+import { chunkText } from '@/lib/rag/chunkText';
+import { embedChunks } from '@/lib/rag/embedChunks';
+
+function getServiceClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+}
 
 /**
- * Process a document after upload: extract text and update status.
- *
- * @param documentId - The UUID of the document row
- * @param storagePath - The Supabase Storage path to the uploaded file
- * @param fileType - The file type ('pdf', 'txt', 'md')
+ * Full ingestion pipeline: extract → chunk → embed → update status.
  */
 export async function processDocument(
   documentId: string,
   storagePath: string,
-  fileType: string
+  fileType: string,
+  userId: string
 ): Promise<void> {
-  // Use service role client to bypass RLS for background processing
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    }
-  );
+  const supabase = getServiceClient();
 
   try {
-    // 1. Download the file from Supabase Storage
+    // 1. Download file from Supabase Storage
     const buffer = await downloadFile(supabase, storagePath);
 
     // 2. Extract text (page-aware for PDFs)
@@ -47,8 +43,17 @@ export async function processDocument(
       throw new Error('No text content could be extracted from the document.');
     }
 
-    // 3. Update document status to 'ready' with page count
-    // Phase 2-3 will add chunking + embedding between steps 2 and 3
+    // 3. Chunk text (~500 tokens, ~75 token overlap)
+    const chunks = chunkText(result.pages);
+
+    if (chunks.length === 0) {
+      throw new Error('Text extraction succeeded but produced no chunks.');
+    }
+
+    // 4. Embed chunks in batches and insert into document_chunks
+    await embedChunks(userId, documentId, chunks);
+
+    // 5. Update document status to 'ready'
     const { error: updateError } = await supabase
       .from('documents')
       .update({
@@ -62,20 +67,15 @@ export async function processDocument(
     }
 
     console.log(
-      `[processDocument] Document ${documentId} processed successfully. ` +
-      `Pages: ${result.pageCount}, Text segments: ${result.pages.length}`
+      `[processDocument] ${documentId} done — ${result.pageCount} pages, ${chunks.length} chunks`
     );
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown processing error';
-    console.error(`[processDocument] Failed to process document ${documentId}:`, errorMessage);
+    console.error(`[processDocument] Failed ${documentId}:`, errorMessage);
 
-    // Update status to 'failed' with error message
     await supabase
       .from('documents')
-      .update({
-        status: 'failed',
-        error_message: errorMessage,
-      })
+      .update({ status: 'failed', error_message: errorMessage })
       .eq('id', documentId);
   }
 }

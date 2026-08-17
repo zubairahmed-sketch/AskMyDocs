@@ -95,7 +95,7 @@ export async function POST(request: Request) {
 
     // Fire background processing AFTER the response is sent (Rule 10)
     after(async () => {
-      await processDocument(document.id, storagePath, fileType);
+      await processDocument(document.id, storagePath, fileType, user.id);
     });
 
     // Return immediately — don't wait for processing
