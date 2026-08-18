@@ -13,7 +13,8 @@ import { after } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createServiceClient } from '@/lib/supabase/server';
 import { uploadFile } from '@/lib/supabase/storage';
-import { processDocument } from '@/lib/rag/processDocument';
+// processDocument is dynamically imported inside after() to avoid loading
+// pdfjs-dist at module init time (DOMMatrix not available on Vercel serverless)
 import { z } from 'zod';
 
 const ALLOWED_TYPES = ['application/pdf', 'text/plain', 'text/markdown'] as const;
@@ -94,7 +95,9 @@ export async function POST(request: Request) {
     }
 
     // Fire background processing AFTER the response is sent (Rule 10)
+    // Dynamic import avoids loading pdfjs-dist at module init time
     after(async () => {
+      const { processDocument } = await import('@/lib/rag/processDocument');
       await processDocument(document.id, storagePath, fileType, user.id);
     });
 
