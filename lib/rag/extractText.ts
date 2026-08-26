@@ -6,10 +6,10 @@
  *
  * Per SPEC Rule 7: pdfjs-dist, not pdf-parse — we need real page boundaries for citations.
  * Per SPEC Rule 3: every chunk must carry page_number from the moment it is created.
+ *
+ * NOTE: pdfjs-dist is dynamically imported inside extractFromPdf() to avoid loading
+ * browser-only globals (DOMMatrix) at module init time on Vercel serverless.
  */
-
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
-import type { TextItem, TextMarkedContent } from 'pdfjs-dist/types/src/display/api';
 
 export interface ExtractedPage {
   pageNumber: number | null;
@@ -21,15 +21,15 @@ export interface ExtractionResult {
   pageCount: number;
 }
 
-function isTextItem(item: TextItem | TextMarkedContent): item is TextItem {
-  return 'str' in item;
-}
-
 /**
  * Extract text from a PDF buffer, page by page.
  * Each page's text is returned separately with its page number.
  */
 async function extractFromPdf(buffer: ArrayBuffer): Promise<ExtractionResult> {
+  // Dynamic import: pdfjs-dist uses DOMMatrix which is not available
+  // in Vercel's serverless Node.js runtime at module init time.
+  const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+
   const data = new Uint8Array(buffer);
   const doc = await pdfjsLib.getDocument({ data }).promise;
   const pageCount = doc.numPages;
@@ -41,8 +41,10 @@ async function extractFromPdf(buffer: ArrayBuffer): Promise<ExtractionResult> {
 
     // Reconstruct text from the text items, preserving line breaks
     const text = textContent.items
-      .filter(isTextItem)
-      .map((item) => (item.hasEOL ? item.str + '\n' : item.str))
+      .filter((item: Record<string, unknown>) => 'str' in item)
+      .map((item: Record<string, unknown>) =>
+        (item.hasEOL ? (item.str as string) + '\n' : (item.str as string))
+      )
       .join('');
 
     if (text.trim().length > 0) {
@@ -89,3 +91,4 @@ export async function extractText(
       throw new Error(`Unsupported file type: ${fileType}`);
   }
 }
+
