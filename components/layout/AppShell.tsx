@@ -2,9 +2,15 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
+
+interface UserProfile {
+  email: string;
+  displayName: string;
+  initials: string;
+}
 
 const NAV_ITEMS = [
   {
@@ -46,6 +52,23 @@ const NAV_ITEMS = [
   },
 ];
 
+function getInitials(email: string, name?: string): string {
+  if (name) {
+    return name
+      .split(' ')
+      .map((w) => w[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2);
+  }
+  return email.charAt(0).toUpperCase();
+}
+
+function getDisplayName(email: string, name?: string): string {
+  if (name) return name;
+  return email.split('@')[0];
+}
+
 interface AppShellProps {
   children: React.ReactNode;
 }
@@ -54,6 +77,22 @@ export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createClient();
+  const [user, setUser] = useState<UserProfile | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      if (authUser) {
+        const email = authUser.email ?? '';
+        const fullName = authUser.user_metadata?.full_name ?? authUser.user_metadata?.name;
+        setUser({
+          email,
+          displayName: getDisplayName(email, fullName),
+          initials: getInitials(email, fullName),
+        });
+      }
+    })();
+  }, [supabase.auth]);
 
   async function handleSignOut() {
     await supabase.auth.signOut();
@@ -97,17 +136,33 @@ export function AppShell({ children }: AppShellProps) {
           })}
         </nav>
 
-        {/* Sign out */}
-        <div className="p-2 border-t border-sidebar-border">
-          <button
-            onClick={handleSignOut}
-            className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-destructive transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.75}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
-            </svg>
-            Sign out
-          </button>
+        {/* User profile + Sign out */}
+        <div className="border-t border-sidebar-border">
+          {user && (
+            <Link
+              href="/settings"
+              className="flex items-center gap-2.5 px-4 py-3 hover:bg-sidebar-accent transition-colors"
+            >
+              <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold shrink-0">
+                {user.initials}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium truncate">{user.displayName}</p>
+                <p className="text-[11px] text-muted-foreground truncate">{user.email}</p>
+              </div>
+            </Link>
+          )}
+          <div className="p-2">
+            <button
+              onClick={handleSignOut}
+              className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-destructive transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.75}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
+              </svg>
+              Sign out
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -123,6 +178,11 @@ export function AppShell({ children }: AppShellProps) {
             </div>
             <span className="text-sm font-semibold">AskMyDocs</span>
           </div>
+          {user && (
+            <Link href="/settings" className="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold">
+              {user.initials}
+            </Link>
+          )}
         </header>
 
         {/* Page content */}
