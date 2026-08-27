@@ -80,6 +80,7 @@ export function AppShell({ children }: AppShellProps) {
   const [user, setUser] = useState<UserProfile | null>(null);
 
   useEffect(() => {
+    // Load current user profile
     (async () => {
       const { data: { user: authUser } } = await supabase.auth.getUser();
       if (authUser) {
@@ -92,7 +93,37 @@ export function AppShell({ children }: AppShellProps) {
         });
       }
     })();
-  }, [supabase.auth]);
+
+    // Listen for auth state changes — auto sign-out on session expiry
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
+        if (event === 'SIGNED_OUT') {
+          // Session expired or manually signed out — redirect to login
+          router.push('/login');
+          router.refresh();
+        }
+      }
+      if (event === 'USER_UPDATED') {
+        // Re-fetch user to update sidebar profile on name change etc.
+        supabase.auth.getUser().then(({ data: { user: authUser } }) => {
+          if (authUser) {
+            const email = authUser.email ?? '';
+            const fullName = authUser.user_metadata?.full_name ?? authUser.user_metadata?.name;
+            setUser({
+              email,
+              displayName: getDisplayName(email, fullName),
+              initials: getInitials(email, fullName),
+            });
+          }
+        });
+      }
+    });
+
+    // Cleanup subscription on unmount
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [supabase.auth, router]);
 
   async function handleSignOut() {
     await supabase.auth.signOut();
