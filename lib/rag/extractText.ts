@@ -26,8 +26,39 @@ export interface ExtractionResult {
  * Each page's text is returned separately with its page number.
  */
 async function extractFromPdf(buffer: ArrayBuffer): Promise<ExtractionResult> {
-  // Dynamic import: pdfjs-dist uses DOMMatrix which is not available
-  // in Vercel's serverless Node.js runtime at module init time.
+  // Polyfill DOMMatrix for Vercel's serverless Node.js runtime.
+  // pdfjs-dist uses DOMMatrix internally for coordinate transforms during
+  // text extraction. In Node.js this global doesn't exist. A minimal
+  // identity-matrix stub is enough since we only read text, not render.
+  if (typeof globalThis.DOMMatrix === 'undefined') {
+    // @ts-expect-error — minimal polyfill, not a full spec implementation
+    globalThis.DOMMatrix = class DOMMatrix {
+      a = 1; b = 0; c = 0; d = 1; e = 0; f = 0;
+      m11 = 1; m12 = 0; m13 = 0; m14 = 0;
+      m21 = 0; m22 = 1; m23 = 0; m24 = 0;
+      m31 = 0; m32 = 0; m33 = 1; m34 = 0;
+      m41 = 0; m42 = 0; m43 = 0; m44 = 1;
+      is2D = true; isIdentity = true;
+      constructor(init?: string | number[]) {
+        if (Array.isArray(init) && init.length === 6) {
+          [this.a, this.b, this.c, this.d, this.e, this.f] = init;
+          this.m11 = this.a; this.m12 = this.b;
+          this.m21 = this.c; this.m22 = this.d;
+          this.m41 = this.e; this.m42 = this.f;
+          this.isIdentity = false;
+        }
+      }
+      inverse() { return new DOMMatrix(); }
+      multiply() { return new DOMMatrix(); }
+      scale() { return new DOMMatrix(); }
+      translate() { return new DOMMatrix(); }
+      transformPoint(p: Record<string, number> = {}) { return { x: p.x ?? 0, y: p.y ?? 0, z: p.z ?? 0, w: p.w ?? 1 }; }
+      toFloat64Array() { return new Float64Array(16); }
+      toString() { return 'matrix(1, 0, 0, 1, 0, 0)'; }
+    };
+  }
+
+  // Dynamic import: only load pdfjs-dist when actually processing a PDF.
   const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
 
   const data = new Uint8Array(buffer);
