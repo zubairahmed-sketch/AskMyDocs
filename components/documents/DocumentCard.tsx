@@ -49,12 +49,16 @@ function formatDate(dateStr: string) {
 
 export function DocumentCard({ document, onDelete }: DocumentCardProps) {
   const [deleting, setDeleting] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   async function handleDelete() {
-    if (!confirm(`Delete "${document.filename}"? This cannot be undone.`)) return;
     setDeleting(true);
-    await onDelete(document.id);
-    setDeleting(false);
+    try {
+      await onDelete(document.id);
+    } finally {
+      setDeleting(false);
+      setConfirming(false);
+    }
   }
 
   return (
@@ -63,61 +67,98 @@ export function DocumentCard({ document, onDelete }: DocumentCardProps) {
       document.status === 'failed' && 'border-destructive/30'
     )}>
       <CardContent className="p-4">
-        {/* Header: icon + filename */}
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5 shrink-0">
-            {FILE_ICONS[document.file_type] ?? FILE_ICONS.txt}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p
-              className="text-sm font-medium truncate text-foreground"
-              title={document.filename}
-            >
-              {document.filename}
+        {/* Inline delete confirmation */}
+        {confirming ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-destructive shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+              </svg>
+              <p className="text-sm font-medium">Delete this document?</p>
+            </div>
+            <p className="text-xs text-muted-foreground truncate" title={document.filename}>
+              &ldquo;{document.filename}&rdquo; will be permanently removed.
             </p>
-            <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <StatusBadge status={document.status} />
-              {document.page_count != null && (
-                <span className="font-data text-xs text-muted-foreground">
-                  {document.page_count} {document.page_count === 1 ? 'page' : 'pages'}
-                </span>
-              )}
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="text-xs h-7 px-3"
+              >
+                {deleting ? (
+                  <span className="flex items-center gap-1.5">
+                    <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Deleting…
+                  </span>
+                ) : 'Delete'}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirming(false)}
+                disabled={deleting}
+                className="text-xs h-7 px-3"
+              >
+                Cancel
+              </Button>
             </div>
           </div>
+        ) : (
+          <>
+            {/* Header: icon + filename */}
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 shrink-0">
+                {FILE_ICONS[document.file_type] ?? FILE_ICONS.txt}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p
+                  className="text-sm font-medium truncate text-foreground"
+                  title={document.filename}
+                >
+                  {document.filename}
+                </p>
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  <StatusBadge status={document.status} />
+                  {document.page_count != null && (
+                    <span className="font-data text-xs text-muted-foreground">
+                      {document.page_count} {document.page_count === 1 ? 'page' : 'pages'}
+                    </span>
+                  )}
+                </div>
+              </div>
 
-          {/* Delete button */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="shrink-0 h-7 w-7 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity hover:text-destructive hover:bg-destructive/10"
-            onClick={handleDelete}
-            disabled={deleting}
-            aria-label={`Delete ${document.filename}`}
-          >
-            {deleting ? (
-              <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-            ) : (
-              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              {/* Delete button — triggers inline confirmation */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="shrink-0 h-7 w-7 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity hover:text-destructive hover:bg-destructive/10"
+                onClick={() => setConfirming(true)}
+                aria-label={`Delete ${document.filename}`}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </Button>
+            </div>
+
+            {/* Error message */}
+            {document.status === 'failed' && document.error_message && (
+              <p className="mt-2 text-xs text-destructive bg-destructive/5 rounded px-2 py-1 line-clamp-2">
+                {document.error_message}
+              </p>
             )}
-          </Button>
-        </div>
 
-        {/* Error message */}
-        {document.status === 'failed' && document.error_message && (
-          <p className="mt-2 text-xs text-destructive bg-destructive/5 rounded px-2 py-1 line-clamp-2">
-            {document.error_message}
-          </p>
+            {/* Upload date */}
+            <p className="mt-2 text-xs text-muted-foreground">
+              Uploaded {formatDate(document.created_at)}
+            </p>
+          </>
         )}
-
-        {/* Upload date */}
-        <p className="mt-2 text-xs text-muted-foreground">
-          Uploaded {formatDate(document.created_at)}
-        </p>
       </CardContent>
     </Card>
   );
