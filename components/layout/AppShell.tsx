@@ -2,9 +2,16 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+
+// ── Session config ──
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;       // 30 minutes of inactivity
+const WARNING_BEFORE_MS = 2 * 60 * 1000;      // Show warning 2 min before logout
+const ACTIVITY_EVENTS = ['mousedown', 'keydown', 'scroll', 'touchstart', 'mousemove'] as const;
+const THROTTLE_MS = 30_000;                     // Only reset timer every 30s to avoid perf overhead
 
 interface UserProfile {
   email: string;
@@ -78,9 +85,70 @@ export function AppShell({ children }: AppShellProps) {
   const router = useRouter();
   const supabase = createClient();
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [showIdleWarning, setShowIdleWarning] = useState(false);
+  const [idleCountdown, setIdleCountdown] = useState(0);
 
+  // Refs for timers
+  const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const logoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastActivityRef = useRef<number>(Date.now());
+
+  // ── Sign out ──
+  const performSignOut = useCallback(async () => {
+    // Clear all idle timers
+    if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+    if (logoutTimerRef.current) clearTimeout(logoutTimerRef.current);
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    setShowIdleWarning(false);
+
+    await supabase.auth.signOut({ scope: 'local' });
+    router.push('/login?reason=session_expired');
+    router.refresh();
+  }, [supabase.auth, router]);
+
+  // ── Reset idle timer (called on user activity) ──
+  const resetIdleTimer = useCallback(() => {
+    // Clear existing timers
+    if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+    if (logoutTimerRef.current) clearTimeout(logoutTimerRef.current);
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    setShowIdleWarning(false);
+
+    // Set warning timer (fires 2 min before logout)
+    warningTimerRef.current = setTimeout(() => {
+      setShowIdleWarning(true);
+      setIdleCountdown(Math.ceil(WARNING_BEFORE_MS / 1000));
+
+      // Start countdown
+      countdownIntervalRef.current = setInterval(() => {
+        setIdleCountdown((prev) => {
+          if (prev <= 1) {
+            if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      // Set final logout timer
+      logoutTimerRef.current = setTimeout(() => {
+        performSignOut();
+      }, WARNING_BEFORE_MS);
+    }, IDLE_TIMEOUT_MS - WARNING_BEFORE_MS);
+  }, [performSignOut]);
+
+  // ── Throttled activity handler ──
+  const handleActivity = useCallback(() => {
+    const now = Date.now();
+    if (now - lastActivityRef.current < THROTTLE_MS) return;
+    lastActivityRef.current = now;
+    resetIdleTimer();
+  }, [resetIdleTimer]);
+
+  // ── Load user profile + auth listener + idle tracker ──
   useEffect(() => {
-    // Load current user profile
+    // Load user profile
     (async () => {
       const { data: { user: authUser } } = await supabase.auth.getUser();
       if (authUser) {
@@ -94,17 +162,13 @@ export function AppShell({ children }: AppShellProps) {
       }
     })();
 
-    // Listen for auth state changes — auto sign-out on session expiry
+    // Auth state listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
-        if (event === 'SIGNED_OUT') {
-          // Session expired or manually signed out — redirect to login
-          router.push('/login');
-          router.refresh();
-        }
+      if (event === 'SIGNED_OUT') {
+        router.push('/login');
+        router.refresh();
       }
       if (event === 'USER_UPDATED') {
-        // Re-fetch user to update sidebar profile on name change etc.
         supabase.auth.getUser().then(({ data: { user: authUser } }) => {
           if (authUser) {
             const email = authUser.email ?? '';
@@ -119,20 +183,77 @@ export function AppShell({ children }: AppShellProps) {
       }
     });
 
-    // Cleanup subscription on unmount
+    // Start idle timer
+    resetIdleTimer();
+
+    // Attach activity listeners
+    ACTIVITY_EVENTS.forEach((event) => {
+      window.addEventListener(event, handleActivity, { passive: true });
+    });
+
     return () => {
       subscription.unsubscribe();
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+      if (logoutTimerRef.current) clearTimeout(logoutTimerRef.current);
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+      ACTIVITY_EVENTS.forEach((event) => {
+        window.removeEventListener(event, handleActivity);
+      });
     };
-  }, [supabase.auth, router]);
+  }, [supabase.auth, router, resetIdleTimer, handleActivity]);
 
   async function handleSignOut() {
+    if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+    if (logoutTimerRef.current) clearTimeout(logoutTimerRef.current);
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
     await supabase.auth.signOut();
     router.push('/login');
     router.refresh();
   }
 
+  function handleStayLoggedIn() {
+    lastActivityRef.current = Date.now();
+    resetIdleTimer();
+  }
+
   return (
     <div className="flex h-full min-h-screen">
+      {/* ── Session Expiry Warning Overlay ── */}
+      {showIdleWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-background border border-border rounded-xl shadow-2xl max-w-sm w-full mx-4 p-6 space-y-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-semibold text-base">Session Expiring</h3>
+                <p className="text-sm text-muted-foreground">
+                  You&apos;ve been idle for a while.
+                </p>
+              </div>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              You&apos;ll be signed out in{' '}
+              <span className="font-semibold text-foreground tabular-nums">
+                {Math.floor(idleCountdown / 60)}:{String(idleCountdown % 60).padStart(2, '0')}
+              </span>{' '}
+              for security.
+            </p>
+            <div className="flex gap-2">
+              <Button onClick={handleStayLoggedIn} className="flex-1">
+                Stay Signed In
+              </Button>
+              <Button variant="outline" onClick={performSignOut} className="flex-1">
+                Sign Out Now
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar — desktop only */}
       <aside className="hidden md:flex flex-col w-56 shrink-0 border-r border-border bg-sidebar">
         {/* Brand */}
